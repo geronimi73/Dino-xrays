@@ -6,6 +6,9 @@ from datasets import load_from_disk, load_dataset
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+from torch.utils.data import WeightedRandomSampler
+from collections import Counter
+
 def train(
   dino_repo = "facebook/dinov3-vits16-pretrain-lvd1689m",
   preprocessed_dataset = "NIH-Chest-X-ray_preprocessed",
@@ -14,10 +17,11 @@ def train(
   lr = 0.0001,
   epochs = 10,
   device = "cuda",
-  dtype = torch.bfloat16
+  dtype = torch.bfloat16,
+  freeze_backbone = False,
 ):
   print("Loading model ..")
-  model = create_dino_classifier(dino_repo, num_classes).to(device).to(dtype)
+  model = create_dino_classifier(dino_repo, num_classes, freeze_backbone=freeze_backbone).to(device).to(dtype)
   print("Loading dataset ..")
   ds = load_preprocessed_ds(preprocessed_dataset)
   print("Creating dataloaders ..")
@@ -28,24 +32,6 @@ def train(
   print("Train!")
   model.train()
 
-  pos_weight = [
-    1.856301718650541,
-    14.173754556500608,
-    63.39673913043478,
-    16.156509695290858,
-    8.830431491294474,
-    41.36524822695036,
-    30.064432989690722,
-    113.25242718446601,
-    33.32857142857143,
-    36.453125,
-    112.16346153846153,
-    54.004629629629626,
-    45.213178294573645,
-    40.36332179930796,
-    555.4761904761905
-  ]
-
   metrics_train, metrics_eval = [], []
   step = 0
   for epoch in range(epochs):
@@ -54,8 +40,7 @@ def train(
       labels = labels.to(model.device).to(model.dtype)
       
       output = model(inputs)
-      loss = torch.nn.functional.binary_cross_entropy_with_logits(output, labels, pos_weight= torch.sqrt(torch.Tensor(pos_weight).to(model.device)) )
-      # loss = torch.nn.functional.binary_cross_entropy_with_logits(output, labels)
+      loss = torch.nn.functional.binary_cross_entropy_with_logits(output, labels)
       loss.backward()
       
       optimizer.step()
@@ -76,7 +61,36 @@ def train(
       step += 1
 
   loss_plot = plot_losses(metrics_train, metrics_eval)
-  loss_plot.savefig(f"loss_{epochs}-epochs_pos_weight_sqrt.png", dpi=150, bbox_inches='tight')     
+  loss_plot.savefig(f"loss_{epochs}-epochs_WeightedRandomSampler_unfreeze_backbone.png", dpi=150, bbox_inches='tight')     
+
+# First, filter your dataset
+def filter_dataset(ds, min_count=500):
+    # Count combinations
+  combo_counts = Counter()
+  for item in tqdm(ds):
+    combo = tuple(sorted(item['labels']))
+    combo_counts[combo] += 1
+  
+  # Keep only combos with >= min_count
+  valid_combos = {combo for combo, cnt in combo_counts.items() if cnt >= min_count}
+  
+  # Filter dataset
+  filtered = ds.filter(lambda x: tuple(sorted(x['labels'])) in valid_combos, num_proc=6)
+  return filtered, valid_combos
+
+# Then create weights
+def get_sample_weights(ds):
+  combo_counts = Counter()
+  sample_combos = []
+  
+  for item in tqdm(ds):
+    combo = tuple(sorted(item['labels']))
+    sample_combos.append(combo)
+    combo_counts[combo] += 1
+  
+  # Weight = 1 / count (so rare combos get higher weight)
+  weights = [1.0 / combo_counts[combo] for combo in sample_combos]
+  return weights
 
 def accuracy(model, dataloader):
   def logits_to_classes(logits, threshold=0.5):
@@ -128,7 +142,12 @@ def get_dataloader(ds, bs):
     num_workers = 8,
   )
 
-  dl_train = DataLoader(ds["train"], batch_size = bs, **dl_common_args)
+  filtered_ds, valid_combos = filter_dataset(ds["train"], min_count=500)
+  weights = get_sample_weights(filtered_ds)
+  sampler = WeightedRandomSampler(weights, num_samples=len(filtered_ds), replacement=True)
+
+  dl_train = DataLoader(filtered_ds, batch_size=bs, sampler=sampler, **dl_common_args)
+  # dl_train = DataLoader(ds["train"], batch_size = bs, **dl_common_args)
   dl_eval = DataLoader(ds["test"], batch_size = bs * 4, **dl_common_args)
 
   return dl_train, dl_eval
@@ -160,10 +179,11 @@ def preprocess(item):
     
     return item
 
-def create_dino_classifier(dino_repo, num_classes):
+def create_dino_classifier(dino_repo, num_classes, freeze_backbone):
   model = Dino3ChestXrayClassifier(
     backbone_repo = dino_repo,
     num_classes = num_classes,
+    freeze_backbone = freeze_backbone
   )
 
   return model
