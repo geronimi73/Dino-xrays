@@ -1,36 +1,51 @@
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from transformers import AutoImageProcessor, AutoModel
-from datasets import load_from_disk, load_dataset
+from datasets import load_dataset
+from transformers import AutoImageProcessor
 from tqdm import tqdm
+from collections import Counter
 import matplotlib.pyplot as plt
 
-from torch.utils.data import WeightedRandomSampler
-from collections import Counter
+from models import Dino3SingleDiseaseClassifier
+from dataloader import create_weighted_dataloader, create_dataloader
+from data import id2cls
 
 def train(
   dino_repo = "facebook/dinov3-vits16-pretrain-lvd1689m",
-  preprocessed_dataset = "NIH-Chest-X-ray_preprocessed",
-  num_classes = 15,
-  batch_size = 128,
+  ds_repo = "g-ronimo/NIH-Chest-X-ray-dataset_10k",
+  num_classes = 1,
+  batch_size = 64,
+  disease_id = 0,
   lr = 0.0001,
-  epochs = 10,
+  epochs = 3,
   device = "cuda",
   dtype = torch.bfloat16,
   freeze_backbone = False,
-):
-  print("Loading model ..")
-  model = create_dino_classifier(dino_repo, num_classes, freeze_backbone=freeze_backbone).to(device).to(dtype)
-  print("Loading dataset ..")
-  ds = load_preprocessed_ds(preprocessed_dataset)
-  print("Creating dataloaders ..")
-  dl_train, dl_eval = get_dataloader(ds, batch_size)
-  optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-  print(f"train: {len(dl_train)} batches, test: {len(dl_eval)} batches (bs={batch_size})")
+  ):
 
-  print("Train!")
-  model.train()
+  print(f"Disease id: {disease_id} ({id2cls[disease_id]})")
+  print("Loading model and image processor ..")
+  model = Dino3SingleDiseaseClassifier(dino_repo, num_classes, freeze_backbone=freeze_backbone).to(device).to(dtype)
+  processor = AutoImageProcessor.from_pretrained(dino_repo)
+
+  print("Loading dataset ..")
+  ds = load_dataset(ds_repo)
+
+  print("Creating dataloaders ..")
+  dl_train = create_weighted_dataloader(
+    ds["train"], 
+    batch_size, disease_id, img_processor=processor,
+    prefetch_factor = 8,
+    num_workers = 8,
+  )
+  dl_test = create_weighted_dataloader(
+    ds["test"], 
+    batch_size, disease_id, img_processor=processor,
+    prefetch_factor = 8,
+    num_workers = 8,
+  )
+  print(f"train: {len(dl_train)} batches, test: {len(dl_test)} batches (bs={batch_size})")
+
+  optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
   metrics_train, metrics_eval = [], []
   step = 0
@@ -39,204 +54,49 @@ def train(
       inputs = inputs.to(model.device).to(model.dtype)
       labels = labels.to(model.device).to(model.dtype)
       
-      output = model(inputs)
-      loss = torch.nn.functional.binary_cross_entropy_with_logits(output, labels)
+      loss, logits = model(inputs, labels)
       loss.backward()
       
       optimizer.step()
       optimizer.zero_grad()
-  
+    
       loss = loss.item()
       metrics_train.append(dict(step=step, loss=loss))
-
+    
       if step % 10 == 0:
         print(f"epoch {epoch}, step {step}, loss {loss:.2f}")
-      if step % 500 == 0:
+      if step % 100 == 0:
         model.eval()
-        acc, loss_eval = accuracy(model, dl_eval)
+        acc, loss_eval = eval(model, dl_test)
         metrics_eval.append(dict(step=step, acc=acc, loss=loss_eval))
         print(f"eval loss {loss_eval:.2f}, acc {acc:.2f}")
-
         model.train()
       step += 1
 
   loss_plot = plot_losses(metrics_train, metrics_eval)
-  loss_plot.savefig(f"loss_{epochs}-epochs_WeightedRandomSampler_unfreeze_backbone.png", dpi=150, bbox_inches='tight')     
+  loss_plot.savefig(f"loss_disease-{disease_id}_{epochs}-epochs_{dtype}.png", dpi=150, bbox_inches='tight')     
 
-# First, filter your dataset
-def filter_dataset(ds, min_count=500):
-    # Count combinations
-  combo_counts = Counter()
-  for item in tqdm(ds):
-    combo = tuple(sorted(item['labels']))
-    combo_counts[combo] += 1
-  
-  # Keep only combos with >= min_count
-  valid_combos = {combo for combo, cnt in combo_counts.items() if cnt >= min_count}
-  
-  # Filter dataset
-  filtered = ds.filter(lambda x: tuple(sorted(x['labels'])) in valid_combos, num_proc=6)
-  return filtered, valid_combos
 
-# Then create weights
-def get_sample_weights(ds):
-  combo_counts = Counter()
-  sample_combos = []
-  
-  for item in tqdm(ds):
-    combo = tuple(sorted(item['labels']))
-    sample_combos.append(combo)
-    combo_counts[combo] += 1
-  
-  # Weight = 1 / count (so rare combos get higher weight)
-  weights = [1.0 / combo_counts[combo] for combo in sample_combos]
-  return weights
-
-def accuracy(model, dataloader):
-  def logits_to_classes(logits, threshold=0.5):
-    probs = torch.sigmoid(logits)
-    return (probs > threshold).long()
-
-  from collections import Counter
-  import json
-
-  examples = []
-  num_all, num_correct, loss_sum = 0, 0, 0
-  for inputs, labels in tqdm(dataloader):
+def eval(model, dl):
+  cnt_all, cnt_correct, num_batches = 0, 0, 0
+  loss_sum = 0
+  preds_all = []
+  for inputs, labels in tqdm(dl):
+    num_batches += 1
+    inputs, labels = inputs.to(model.device), labels.to(model.device)
+    inputs, labels = inputs.to(model.dtype), labels.to(model.dtype)
     with torch.no_grad():
-      logits = model(inputs.to(model.device).to(model.dtype)).cpu()
-      loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels).cpu()
-
-    labels_pred = logits_to_classes(logits)
-    for i in range(min(10, labels_pred.shape[0])):
-      pred_indices = labels_pred[i].nonzero(as_tuple=True)[0].tolist()
-      # true_indices = labels[i].nonzero(as_tuple=True)[0].tolist()
-      examples.append(tuple(pred_indices))
-
-    num_correct += (labels == labels_pred).all(dim=1).sum().item()
-    num_all += inputs.shape[0]
+        loss, logits = model(inputs, labels)
+    loss, logits, labels = loss.cpu(), logits.cpu(), labels.cpu()
+    # count correct samples per batch for accuracy
+    pred = (torch.sigmoid(logits) > 0.5).long()
+    preds_all.extend(pred.squeeze().tolist())
+    cnt_all += len(labels)
+    cnt_correct += torch.sum(pred == labels.long()).item()
+    # sum loss per batch
     loss_sum += loss.item()
-
-  print(json.dumps(Counter(examples).most_common(), indent=None))
-  acc, loss = num_correct/num_all, loss_sum/len(dataloader)
-
-  return acc, loss
-
-def get_dataloader(ds, bs):
-  processor = AutoImageProcessor.from_pretrained("facebook/dinov3-vits16-pretrain-lvd1689m")
-
-  def collate_fn(items):
-    images_tensor = torch.stack(
-      processor([ i["image"] for i in items ])["pixel_values"]
-    )
-    labels = [i["labels"] for i in items]
-    labels_tensor = torch.zeros(len(labels), 15)
-    for i,lbls in enumerate(labels): 
-        labels_tensor[i, lbls] = 1
-    
-    return images_tensor, labels_tensor
-
-  dl_common_args = dict(
-    collate_fn = collate_fn,
-    prefetch_factor = 8,
-    num_workers = 8,
-  )
-
-  filtered_ds, valid_combos = filter_dataset(ds["train"], min_count=500)
-  weights = get_sample_weights(filtered_ds)
-  sampler = WeightedRandomSampler(weights, num_samples=len(filtered_ds), replacement=True)
-
-  dl_train = DataLoader(filtered_ds, batch_size=bs, sampler=sampler, **dl_common_args)
-  # dl_train = DataLoader(ds["train"], batch_size = bs, **dl_common_args)
-  dl_eval = DataLoader(ds["test"], batch_size = bs * 4, **dl_common_args)
-
-  return dl_train, dl_eval
-
-def load_preprocessed_ds(ds_name):
-  return load_from_disk(ds_name)
-
-def preprocess_xray_ds():
-  ds = load_dataset(
-    "alkzar90/NIH-Chest-X-ray-dataset", 
-    'image-classification',
-    num_proc = 12
-  )
-
-  def preprocess_single(item, resizeTo=(300, 300)):
-    # not all images are RGB     
-    item["image"] = item["image"].resize(resizeTo).convert('RGB')
-
-    return item
-
-  ds = ds.map(preprocess_single, batched=False, num_proc=12)
-  # ds.set_format(type='torch', columns=['image_tensor', 'labels'], output_all_columns=True)
-  ds.save_to_disk("NIH-Chest-X-ray_preprocessed")
-
-def preprocess(item):
-    item["image_tensor"] = processor(
-        item["image"].convert('RGB') 
-    )["pixel_values"]
-    
-    return item
-
-def create_dino_classifier(dino_repo, num_classes, freeze_backbone):
-  model = Dino3ChestXrayClassifier(
-    backbone_repo = dino_repo,
-    num_classes = num_classes,
-    freeze_backbone = freeze_backbone
-  )
-
-  return model
-
-class Dino3ChestXrayClassifier(nn.Module):
-  def __init__(
-    self, 
-    backbone_repo = "facebook/dinov3-vitb16-pretrain-lvd1689m", 
-    num_classes = 15,
-    freeze_backbone = True,
-  ):
-    super().__init__()
-    self.backbone = AutoModel.from_pretrained(backbone_repo)
-    if freeze_backbone:
-      for p in self.backbone.parameters():
-        p.requires_grad = False
-      self.backbone.eval()
-
-    self.head = nn.Linear(
-        self.backbone.config.hidden_size,
-        num_classes
-    )
-
-  def forward(self, x):
-    x = self.backbone(x).last_hidden_state[:,0]
-    x = self.head(x)
-    
-    return x 
-      
-  @property
-  def device(self): return self.backbone.device
-
-  @property
-  def dtype(self): return self.backbone.dtype
-
-# from model card; label -> id
-cls2id = { "No Finding": 0, "Atelectasis": 1, "Cardiomegaly": 2, "Effusion": 3, "Infiltration": 4, "Mass": 5, "Nodule": 6, "Pneumonia": 7, "Pneumothorax": 8, "Consolidation": 9, "Edema": 10, "Emphysema": 11, "Fibrosis": 12, "Pleural_Thickening": 13, "Hernia": 14 }
-# id -> labe;
-id2cls = {}
-for cls in cls2id: id2cls[cls2id[cls]] = cls
-
-def show_item(item, sz=224):
-  "Show a single image+labels as plot. 224px is the default preprocessing resize for DinoV3"
-  thumb = item['image'].resize((sz,sz))
-  # item['labels'] is a Tensor
-  labels_txt = ', '.join([id2cls[lab] for lab in item['labels'].numpy()])
-  fig,ax = plt.subplots(figsize=(3,3))
-  ax.imshow(thumb, cmap='gray')
-  ax.set_title(labels_txt, fontsize=10, wrap=True)
-  ax.axis('off')
-  plt.tight_layout()
-  plt.close(fig)
-  return fig
+  print(Counter(preds_all))
+  return cnt_correct / cnt_all, loss_sum / num_batches
 
 def plot_losses(losses_train, losses_eval):
   "Plot training and eval loss and accuracy."
@@ -270,6 +130,7 @@ def plot_losses(losses_train, losses_eval):
   plt.tight_layout()
   
   return fig
+
 
 if __name__ == "__main__":
   # preprocess_xray_ds()
