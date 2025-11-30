@@ -1,6 +1,7 @@
 import numpy as np
 import itertools 
 import torch
+import torchvision.transforms as T
 
 from data import id2cls
 from functools import partial
@@ -24,7 +25,9 @@ def create_weighted_sampler(ds, disease_id, num_proc=2):
     pos_indcs, neg_indcs = split_by_disease(ds, disease_id, num_proc=num_proc)
     weights = np.zeros(len(ds))
     weights[pos_indcs] = 1/len(pos_indcs)
-    weights[neg_indcs] = 1/len(neg_indcs)    
+    weights[neg_indcs] = 1/len(neg_indcs)
+
+    print(f"create_weighted_sampler() for disease {disease_id}: {len(pos_indcs)}+ve samples ({len(pos_indcs)/len(ds)*100:.2f}%), {len(neg_indcs)}-ve samples")
 
     sampler = WeightedRandomSampler(weights, num_samples = len(ds))
     
@@ -41,10 +44,25 @@ def test_weighted_sampler(ds, disease_id, num_proc=2):
     print(f"Positive: {pos_count}/1000 = {pos_count/10}%")
     assert pos_count > 450 and pos_count <550
 
-def collate_fn(items, disease_id, img_processor):
+
+def augment_img(img, resizeTo=(280, 280)):
+    "Augment by rotating, transforming, changing brightness and color"
+    transform = T.Compose([
+        T.RandomRotation([-5,5]),
+        T.CenterCrop(resizeTo),
+        T.RandomResizedCrop(resizeTo, scale=(0.9, 1.0)),
+        T.ColorJitter(brightness=0.1, contrast=0.2)
+    ])
+    return transform(img)
+
+def collate_fn(items, disease_id, img_processor, augment):
     "General purpose collator function for our NIH dataset"
+    images = [ i["image"] for i in items ]
+    if augment:
+        images = [ augment_img(img) for img in images ]        
+
     images_tensor = torch.stack(
-      img_processor([ i["image"] for i in items ])["pixel_values"]
+      img_processor(images)["pixel_values"]
     )
     labels_tensor = torch.Tensor([
         (1 if disease_id in i["labels"] else 0) 
@@ -59,6 +77,7 @@ def create_weighted_dataloader(
     batch_size, 
     disease_id, 
     img_processor,
+    augment,
     prefetch_factor = None, 
     num_workers = 0,
 ):
@@ -67,32 +86,43 @@ def create_weighted_dataloader(
     
     return DataLoader(
         ds, 
-        collate_fn = partial(collate_fn, img_processor = img_processor, disease_id = disease_id),
+        collate_fn = partial(collate_fn, img_processor = img_processor, disease_id = disease_id, augment = augment),
         batch_size=batch_size, 
         sampler=sampler, 
         prefetch_factor=prefetch_factor, 
         num_workers=num_workers
     )
 
-def create_dataloader(
-    ds, 
-    batch_size, 
-    disease_id, 
-    img_processor,
-    prefetch_factor = None, 
-    num_workers = 0,
-):
-    "Creates a standard data loader for given dataset and disease"
+# def create_dataloader(
+#     ds, 
+#     batch_size, 
+#     disease_id, 
+#     img_processor,
+#     prefetch_factor = None, 
+#     num_workers = 0,
+# ):
+#     "Creates a standard data loader for given dataset and disease"
     
-    return DataLoader(
-        ds, 
-        collate_fn = partial(collate_fn, img_processor = img_processor, disease_id = disease_id),
-        batch_size=batch_size, 
-        # sampler=sampler, 
-        prefetch_factor=prefetch_factor, 
-        num_workers=num_workers
-    )
+#     return DataLoader(
+#         ds, 
+#         collate_fn = partial(collate_fn, img_processor = img_processor, disease_id = disease_id),
+#         batch_size=batch_size, 
+#         # sampler=sampler, 
+#         prefetch_factor=prefetch_factor, 
+#         num_workers=num_workers
+#     )
 
+if __name__ == "__main__":
+    from datasets import load_dataset
+    import json
+    ds_repo = "g-ronimo/NIH-Chest-X-ray-dataset_resized300px"
+    ds = load_dataset(ds_repo)
+    results = {}
+    for d_id in range(15):
+        print(d_id)
+        pos, neg = split_by_disease(ds["train"], d_id)
+        results[d_id] = len(pos)
+    print(json.dumps(results, indent = 2))
 
 
 
