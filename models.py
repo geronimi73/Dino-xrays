@@ -18,8 +18,8 @@ class Dino3SingleDiseaseClassifier(nn.Module):
       self.backbone.eval()
 
     self.head = nn.Linear(
-        self.backbone.config.hidden_size,
-        num_classes
+      self.backbone.config.hidden_size,
+      num_classes
     )
 
   def forward(self, x, labels=None, return_dino_atn = False):
@@ -29,8 +29,8 @@ class Dino3SingleDiseaseClassifier(nn.Module):
     logits = self.head(x)
 
     if labels is not None:
-        loss = nn.functional.binary_cross_entropy_with_logits(logits, labels)
-        return loss, logits      
+      loss = nn.functional.binary_cross_entropy_with_logits(logits, labels)
+      return loss, logits      
     return logits if not return_dino_atn else logits, atn
       
   @property
@@ -44,8 +44,8 @@ class Dino3SingleDiseaseClassifier(nn.Module):
     checkpoint = {
       'model_state_dict': self.state_dict(),
       'model_config': {
-          'num_classes': self.head.out_features,
-          'backbone_repo': self.backbone_repo
+        'num_classes': self.head.out_features,
+        'backbone_repo': self.backbone_repo,
       }
     }
     
@@ -53,15 +53,14 @@ class Dino3SingleDiseaseClassifier(nn.Module):
     print(f"Checkpoint saved to {path}")
 
   @classmethod
-  def load_checkpoint(cls, path, freeze_backbone=True):
+  def load_checkpoint(cls, path):
     "Load model from checkpoint."
     checkpoint = torch.load(path)
     
     # Create model instance
     model = cls(
-        backbone_repo=checkpoint['model_config']['backbone_repo'],
-        num_classes=checkpoint['model_config']['num_classes'],
-        freeze_backbone=freeze_backbone
+      backbone_repo=checkpoint['model_config']['backbone_repo'],
+      num_classes=checkpoint['model_config']['num_classes'],
     )
     
     # Load weights
