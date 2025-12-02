@@ -40,7 +40,7 @@ def train(
     frozen = '_frozen' if freeze_backbone else '',
   )
 
-  assert not os.path.exists(output_dir + run_name + ".txt"), f"Run already exists: {run_name}"
+  assert not os.path.exists(output_dir + run_name + ".pth"), f"Train run already exists: {run_name}"
 
   log = partial(log_fn, log_dir = output_dir)
   log(run_name, f"seed: {seed}")
@@ -145,7 +145,5 @@ def eval(model, dl):
   return cnt_correct / cnt_all, loss_sum / num_batches
 
 if __name__ == "__main__":
-  train(
-    disease_id = 2, 
-    epochs = 3
-  )
+  for d in range(15):
+    train(disease_id = d, epochs = 3)
