@@ -16,6 +16,11 @@ def list_files(directory, prefix = None, suffix = None):
 
   return files
 
+def read_txt_file(file_path):
+  with open(file_path, 'r', encoding='utf-8') as file:
+    content = file.read()
+  return content
+
 def label_pil(image, label, sz=224):
   "Show a single image+labels as plot. 224px is the default preprocessing resize for DinoV3"
   fig,ax = plt.subplots(figsize=(3,3))
