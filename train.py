@@ -22,14 +22,13 @@ def train(
   disease_id = 2,
   lr = 0.0001,
   epochs = 3,
-  eval_steps = 700,       # eval ~2 per epoch
   device = "cuda",
   dtype = torch.bfloat16,
   freeze_backbone = False,
   augment_train_samples = True,
+  output_dir = "results/",
   seed = 7,
-  output_dir = "models/",
-  test = True,
+  test = False,
   ):
   set_seed(seed)
   os.makedirs(output_dir, exist_ok=True)
@@ -97,7 +96,7 @@ def train(
     
       if step % 10 == 0:
         log(run_name, f"epoch {epoch}, step {step}, loss {loss:.2f}")
-      if step % (len(dl_train) - 1) == 0:
+      if step % (len(dl_train) - 1) == 0:  # eval once per epoch
         model.eval()
         acc, loss_eval = eval(model, dl_test)
         metrics_eval.append(dict(step=step, acc=acc, loss=loss_eval))
@@ -105,8 +104,8 @@ def train(
         model.train()
 
         if max_acc is None or acc > max_acc:
-          max_acc = acc
           model.save_checkpoint(f"{output_dir}/{run_name}.pth")
+          max_acc = acc
 
       step += 1
 
