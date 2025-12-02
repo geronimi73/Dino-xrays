@@ -1,2 +1,11 @@
 /__pycache__
 /nb/.ipynb_checkpoints
+.*
+/model_atn-samples
+/model_atn-samples_old
+/model_logs_old
+/model_logs
+/models
+/loss_old
+/models_old
+/nb
