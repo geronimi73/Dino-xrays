@@ -8,7 +8,7 @@ from functools import partial
 from torch.utils.data import WeightedRandomSampler, DataLoader
 
 def split_by_disease(ds, disease_id, num_proc=2):
-    "Split a HF dataset by disease. Returns idcs of positive and negative items for given disease."
+    "Split an NIH dataset by disease. Returns idcs of positive and negative items for given disease."
     def has_disease(item, disease_id):
         return dict(has_disease = disease_id in item["labels"])
     ds_split = ds.map(
