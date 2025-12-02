@@ -80,7 +80,6 @@ def atn_vis(
 
   pos_indcs, neg_indcs = split_by_disease(ds, disease_id)
 
-
   false_positives, false_negatives = [], []
   true_positives, true_negatives = [], []
 
