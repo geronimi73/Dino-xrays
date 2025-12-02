@@ -119,7 +119,11 @@ def atn_vis(
     elif not label and not prediction and not len(true_negatives) > num_samples:
       true_negatives.append(overview)
 
-  output_prefix = str(Path(ckpt_path).with_suffix(""))
+  # Put images in results/run_name/*.png
+  run_name_dir = os.path.dirname(ckpt_path)
+  run_name = os.path.splitext(os.path.basename(ckpt_path))[0]
+  output_dir = os.path.join(run_name_dir, run_name + "_dino-focus")
+  os.makedirs(output_dir, exist_ok=True)
 
   for images, name in [
     (false_positives, "false_positives"),
@@ -127,9 +131,9 @@ def atn_vis(
     (true_positives, "true_positives"),
     (true_negatives, "true_negatives"),
   ]:
-    out_fn = f"{output_prefix}_atn_{name}.png"
-    make_grid(images, cols=3, rows=len(images)//3).save(out_fn)
+    out_fn = f"{output_dir}/{name}.png"
     print(out_fn)
+    make_grid(images, cols=3, rows=len(images)//3).save(out_fn)
 
 if __name__ == "__main__":
   ckpt_dir = "./results"
