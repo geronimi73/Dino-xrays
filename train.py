@@ -123,7 +123,7 @@ def eval(model, dl):
   cnt_all, cnt_correct, num_batches = 0, 0, 0
   loss_sum = 0
   preds_all = []
-  for inputs, labels in tqdm(dl):
+  for inputs, labels in tqdm(dl, "Eval"):
     num_batches += 1
     inputs, labels = inputs.to(model.device), labels.to(model.device)
     inputs, labels = inputs.to(model.dtype), labels.to(model.dtype)
@@ -147,7 +147,7 @@ def eval(model, dl):
 if __name__ == "__main__":
   train(
     disease_id = 2, 
-    epochs = 2
+    epochs = 3
   )
   # for disease_id in [d for d in range(0, 15)]:
     # train(disease_id = disease_id)
