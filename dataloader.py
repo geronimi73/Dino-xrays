@@ -44,9 +44,8 @@ def test_weighted_sampler(ds, disease_id, num_proc=2):
     print(f"Positive: {pos_count}/1000 = {pos_count/10}%")
     assert pos_count > 450 and pos_count <550
 
-
 def augment_img(img, resizeTo=(280, 280)):
-    "Augment by rotating, transforming, changing brightness and color"
+    "Augment an xray image by rotating, transforming, changing brightness and color"
     transform = T.Compose([
         T.RandomRotation([-5,5]),
         T.CenterCrop(resizeTo),
@@ -56,7 +55,7 @@ def augment_img(img, resizeTo=(280, 280)):
     return transform(img)
 
 def collate_fn(items, disease_id, img_processor, augment):
-    "General purpose collator function for our NIH dataset"
+    "Turn a list of NIH samples into a batch."
     images = [ i["image"] for i in items ]
     if augment:
         images = [ augment_img(img) for img in images ]        
@@ -81,7 +80,7 @@ def create_weighted_dataloader(
     prefetch_factor = None, 
     num_workers = 0,
 ):
-    "Creates a weighted (=balanced) data loader for given dataset and disease"
+    "Creates a balanced dataloader, returns batches where samples 50% w/ and 50% w/o disease"
     sampler = create_weighted_sampler(ds, disease_id)
     
     return DataLoader(
@@ -92,38 +91,3 @@ def create_weighted_dataloader(
         prefetch_factor=prefetch_factor, 
         num_workers=num_workers
     )
-
-# def create_dataloader(
-#     ds, 
-#     batch_size, 
-#     disease_id, 
-#     img_processor,
-#     prefetch_factor = None, 
-#     num_workers = 0,
-# ):
-#     "Creates a standard data loader for given dataset and disease"
-    
-#     return DataLoader(
-#         ds, 
-#         collate_fn = partial(collate_fn, img_processor = img_processor, disease_id = disease_id),
-#         batch_size=batch_size, 
-#         # sampler=sampler, 
-#         prefetch_factor=prefetch_factor, 
-#         num_workers=num_workers
-#     )
-
-if __name__ == "__main__":
-    from datasets import load_dataset
-    import json
-    ds_repo = "g-ronimo/NIH-Chest-X-ray-dataset_resized300px"
-    ds = load_dataset(ds_repo)
-    results = {}
-    for d_id in range(15):
-        print(d_id)
-        pos, neg = split_by_disease(ds["train"], d_id)
-        results[d_id] = len(pos)
-    print(json.dumps(results, indent = 2))
-
-
-
-
