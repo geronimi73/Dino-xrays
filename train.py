@@ -149,5 +149,3 @@ if __name__ == "__main__":
     disease_id = 2, 
     epochs = 3
   )
-  # for disease_id in [d for d in range(0, 15)]:
-    # train(disease_id = disease_id)
