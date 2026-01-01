@@ -1,5 +1,7 @@
 Fooling around with an X-Ray image dataset
 
+Blog post: [Chest X-Ray Classification with DINOv3](https://medium.com/@geronimo7/chest-x-ray-classification-with-dinov3-c563587d9dde)
+
 **Problem:** Multi-label chest X-ray classification - predict which of 15 thoracic diseases are present in an image (each image can have multiple labels).
 
 **Dataset:** NIH Chest X-ray dataset (subset: 750 train / 250 test, full: 86k train / 25k test)
